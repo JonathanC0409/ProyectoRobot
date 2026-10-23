@@ -9,6 +9,7 @@ no una medida de certeza de profundidad.
 
 from dataclasses import dataclass
 from collections.abc import Sequence
+from collections import deque
 from math import acos, asin, atan2, cos, hypot, pi, radians, sin, sqrt
 from statistics import fmean
 
@@ -116,6 +117,12 @@ SpatialMeasurements = tuple[SpatialArm | None, SpatialArm | None]
 
 def measure_world(observation: Observation, width: int, height: int
                   ) -> SpatialMeasurements:
+    """Obtiene brazos 3D filtrados; inspect_world también expone los rechazos."""
+    return inspect_world(observation, width, height)[0]
+
+
+def inspect_world(observation: Observation, width: int, height: int
+                  ) -> tuple[SpatialMeasurements, tuple[str, str]]:
     """Marco frontal obtenido de hombros y vertical óptica, sin exigir caderas.
 
     Solo se usan world landmarks con confianza, longitudes plausibles y
@@ -123,37 +130,43 @@ def measure_world(observation: Observation, width: int, height: int
     lateral; no se sustituye world por el Z normalizado de la imagen.
     """
     image, world = observation.pose, observation.pose_world
-    if len(image) != 33 or len(world) != 33 or min(width, height) <= 0:
-        return None, None
-    if not all(image[index].visible(0.65) and world[index].confident(0.65)
-               for index in (11, 12)):
-        return None, None
+    if len(world) != 33:
+        return (None, None), ("SIN WORLD",) * 2
+    if len(image) != 33 or min(width, height) <= 0:
+        return (None, None), ("SIN POSE",) * 2
+    if not all(image[index].visible(0.65) for index in (11, 12)):
+        return (None, None), ("HOMBROS OCULTOS",) * 2
+    if not all(world[index].confident(0.65) for index in (11, 12)):
+        return (None, None), ("CONFIANZA WORLD HOMBROS",) * 2
     shoulder_vector = subtract(coordinates(world[11]), coordinates(world[12]))
     shoulder_width = norm(shoulder_vector)
     if not 0.15 <= shoulder_width <= 0.65:
-        return None, None
+        return (None, None), ("ESCALA WORLD HOMBROS",) * 2
     left_axis = unit(shoulder_vector)
     if left_axis[0] < 0.5 or abs(left_axis[2]) > 0.5 or abs(left_axis[1]) > 0.5:
-        return None, None
+        return (None, None), ("TORSO LATERAL",) * 2
     optical_up = (0.0, -1.0, 0.0)
     up_axis = unit(tuple(value - dot(optical_up, left_axis) * axis
                          for value, axis in zip(optical_up, left_axis)))
     back_axis = cross(up_axis, left_axis)
     basis = (left_axis, back_axis, up_axis)
-    arms = []
+    arms, reasons = [], []
     for indices in ((11, 13, 15), (12, 14, 16)):
         if not all(image[index].visible(0.65) and world[index].confident(0.65)
                    for index in indices):
             arms.append(None)
+            reasons.append("CONFIANZA BRAZO")
             continue
         vectors = [subtract(coordinates(world[end]), coordinates(world[start]))
                    for start, end in zip(indices, indices[1:])]
         lengths = tuple(norm(vector) / shoulder_width for vector in vectors)
         if not all(0.3 <= length <= 1.5 for length in lengths):
             arms.append(None)
+            reasons.append("LONGITUD WORLD")
             continue
         if not 0.55 <= lengths[1] / lengths[0] <= 1.25:
             arms.append(None)
+            reasons.append("PROPORCION WORLD")
             continue
         coherent = True
         for vector, start, end in zip(vectors, indices, indices[1:]):
@@ -167,10 +180,12 @@ def measure_world(observation: Observation, width: int, height: int
                     coherent = False
         if not coherent:
             arms.append(None)
+            reasons.append("PROYECCION WORLD")
             continue
         transformed = [unit(tuple(dot(vector, axis) for axis in basis)) for vector in vectors]
         arms.append(SpatialArm(*transformed, *lengths))
-    return arms[0], arms[1]
+        reasons.append("OK")
+    return (arms[0], arms[1]), (reasons[0], reasons[1])
 
 
 class SpatialMapper:
@@ -181,6 +196,7 @@ class SpatialMapper:
             raise ValueError("La recuperación debe ser no negativa.")
         self.recovery_ms = recovery_ms
         self.reference: list[tuple[ArmAngles, float, float] | None] = [None, None]
+        self._calibration_samples = [deque(maxlen=90), deque(maxlen=90)]
         self.reset_tracking()
 
     def reset_tracking(self) -> None:
@@ -189,6 +205,7 @@ class SpatialMapper:
         self._since: list[int | None] = [None, None]
         self._count = [0, 0]
         self._last_ms: list[int | None] = [None, None]
+        self.status = ["SIN DATOS", "SIN DATOS"]
 
     def calibrate(self, samples: Sequence[SpatialMeasurements]) -> None:
         for side in range(2):
@@ -214,15 +231,56 @@ class SpatialMapper:
                           fmean(angle.flexion for angle in angles)), upper, forearm,
             )
 
+    def observe_neutral(self, measured: SpatialMeasurements, timestamp: int,
+                        calibration_ms: int = 1000) -> tuple[str, str]:
+        """Completa referencias pendientes con postura neutral fresca por lado."""
+        if calibration_ms < 200:
+            raise ValueError("La calibración 3D requiere al menos 200 ms.")
+        statuses = []
+        for side, arm in enumerate(measured):
+            samples = self._calibration_samples[side]
+            if self.reference[side] is not None:
+                statuses.append("LISTA")
+                continue
+            if arm is None:
+                samples.clear()
+                statuses.append("ESPERANDO DATOS")
+                continue
+            angles = solve_arm(arm.upper, arm.forearm, 1 if side == 0 else -1)
+            if (abs(angles.shoulder) > radians(35) or abs(angles.flexion) > radians(25)
+                    or angles.elbow > radians(25)):
+                samples.clear()
+                statuses.append("BAJAR Y ESTIRAR BRAZO")
+                continue
+            if samples and (timestamp - samples[-1][0] > 350 or any(
+                abs(getattr(angles, field) - getattr(samples[0][2], field)) > radians(8)
+                for field in ("shoulder", "flexion", "elbow")
+            )):
+                samples.clear()
+            samples.append((timestamp, arm, angles))
+            progress = min(1.0, len(samples) / 6, (timestamp - samples[0][0]) / calibration_ms)
+            if progress >= 1:
+                paired = [(sample[1], None) if side == 0 else (None, sample[1]) for sample in samples]
+                self.calibrate(paired)
+                if self.reference[side] is None:
+                    samples.clear()
+                    statuses.append("MANTENER BRAZO QUIETO")
+                    continue
+            statuses.append("LISTA" if self.reference[side] is not None else f"CALIBRAR 3D {progress:.0%}")
+        return tuple(statuses)
+
     def targets(self, measured: SpatialMeasurements, timestamp: int
                 ) -> tuple[ArmAngles | None, ArmAngles | None]:
         targets = []
         for side, arm in enumerate(measured):
             reference = self.reference[side]
+            self.status[side] = "SIN CALIBRAR" if reference is None else "SIN DATOS"
             valid = reference is not None and arm is not None
             if valid:
                 valid = (0.7 <= arm.upper_ratio / reference[1] <= 1.3
                          and 0.7 <= arm.forearm_ratio / reference[2] <= 1.3)
+                if not valid:
+                    self.status[side] = "LONGITUD INESTABLE"
             previous_vectors = self._vectors[side]
             if valid and previous_vectors is not None:
                 elapsed = (timestamp - self._last_ms[side]) / 1000
@@ -230,6 +288,8 @@ class SpatialMapper:
                 valid = all(norm(subtract(current, previous)) <= maximum
                             for current, previous in ((arm.upper, previous_vectors.upper),
                                                       (arm.forearm, previous_vectors.forearm)))
+                if not valid:
+                    self.status[side] = "SALTO 3D"
             if not valid:
                 self._vectors[side] = None
                 self._since[side] = None
@@ -245,8 +305,10 @@ class SpatialMapper:
                 self._since[side] = timestamp
             self._count[side] += 1
             if self._count[side] < 3 or timestamp - self._since[side] < self.recovery_ms:
+                self.status[side] = f"RECUPERANDO {min(3, self._count[side])}/3"
                 targets.append(None)
                 continue
+            self.status[side] = "ACTIVA"
             zero = reference[0]
             abduction = radians(10) + angles.shoulder - zero.shoulder * shoulder_confidence(arm.upper)
             targets.append(ArmAngles(

@@ -18,7 +18,14 @@ Paquete Python `proyectorobot/`, ejecutable desde la raíz sin instalación edit
 - `simulation/`: humanoide MJCF, motor MuJoCo y aplicación de Fase 2.
 - `control/retargeting.py`: calibración y conversión de pose frontal a ángulos.
 - `control/spatial.py`: cinemática 3D, calidad de world landmarks y respaldo conservador.
+- `control/pose_quality.py`: validación temporal y geométrica previa al control
+  y dibujo de Fase 2; enmascarar puntos dudosos sin intercambiar lados.
 - `control/motion.py`: suavizado, límites y vigilancia de seguimiento.
+- `control/hands.py`, `control/gestures.py`: consignas, geometría y calibración
+  independiente de manos, sin OpenCV/MediaPipe.
+- `simulation/hand_model.py`, `assets/hand.xml`: manos MJCF y escena de mesa.
+- `simulation/manipulation.py`, `grasp_demo.py`, `hands_app.py`: Fase 2.2 aislada;
+  no aplicar las guardas de ocho qpos de `engine.py` a objetos libres.
 - `learning/`: reservado para aprendizaje por demostración y refuerzo.
 - `agents/`: reservado para coordinación futura; sin servicios externos por defecto.
 - `data/`: contratos de datos; SQLite y grabación se incorporarán en su fase.
@@ -48,6 +55,11 @@ sin afirmar que se ha reconstruido profundidad o medido giro axial real.
 - Una sola distribución OpenCV por venv; preferir `opencv-contrib-python` porque MediaPipe la requiere. No usar variantes headless para ventanas.
 - Mantener dependencias por fase. No importar MuJoCo, Gymnasium, SB3 o agentes desde Fase 1. La Fase 2 está autorizada; las siguientes no.
 - No introducir grabación, redes, hilos, GPU o infraestructura sin una necesidad validada.
+- La aceleración gráfica de Fase 2 está autorizada: render OpenGL con Intel/NVIDIA
+  existentes, contexto real verificado y respaldo software explícito. MediaPipe
+  y física permanecen en CPU. No instalar ni cambiar controladores sin autorización.
+  NV118/MX130 usa dibujo directo a ventana; mantener bloqueada la copia offscreen
+  que falló al redimensionar. Comparar GPU con la misma resolución y carga.
 
 ## Verificación
 
@@ -64,3 +76,9 @@ En Fase 2, `CameraStream` solapa lectura V4L2 con inferencia tras medir su esper
 un hilo propietario de la webcam y una sola imagen pendiente, con timestamp real
 de entrega y cierre acotado. Fase 1 conserva `Camera` síncrona. No añadir más
 paralelismo sin nuevas mediciones; el proceso aislado mantiene la vigilancia.
+La Fase 2.2 está autorizada. Cubos con freejoints, contactos y fricción: no escribir
+sus qpos durante ejecución, añadir welds/mocaps ni simular agarre por proximidad.
+Las igualdades de dedos solo acoplan medio/anular/meñique. Validar el agarre físico
+antes de visión. La pérdida de visión abre las manos y retorna a postura segura;
+un objeto sostenido puede caer. El teclado es un modo asistido explícito, no una
+reconstrucción de posición monocular. Conservar los comandos y modelos previos.

@@ -23,6 +23,7 @@ class Phase2AppTests(unittest.TestCase):
         args = build_parser().parse_args([])
         self.assertEqual((args.width, args.height, args.fps), (480, 360, 30))
         self.assertEqual(args.render_fps, 30)
+        self.assertEqual(args.graphics, "auto")
         self.assertEqual((args.window_width, args.window_height), (640, 480))
         args = build_parser().parse_args(["--fps", "20", "--render-fps", "15"])
         self.assertEqual((args.fps, args.render_fps), (20, 15))

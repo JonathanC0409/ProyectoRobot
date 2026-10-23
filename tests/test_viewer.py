@@ -31,6 +31,50 @@ class ViewerTests(unittest.TestCase):
         viewer._gl.GL_DEPTH_BUFFER_BIT = 0x0100
         return viewer
 
+    def test_direct_render_never_blits_and_presents_opaque_after_renderer_state_changes(self):
+        viewer = self.make_viewer()
+        viewer.draw_target = "window"
+        state = {"alpha": 0, "clear_alpha": 0, "mask": (True,) * 4, "clipped": True, "clears": 0}
+
+        def set_buffer(buffer, context):
+            self.assertEqual(buffer, mujoco.mjtFramebuffer.mjFB_WINDOW)
+            context.currentBuffer = buffer
+
+        def clear(mask):
+            self.assertFalse(state["clipped"])
+            if state["mask"] == (True,) * 4:
+                self.assertTrue(mask & viewer._gl.GL_DEPTH_BUFFER_BIT)
+                state["clears"] += 1
+            if state["mask"][3]:
+                state["alpha"] = state["clear_alpha"]
+
+        def render(rectangle, scene, context):
+            self.assertEqual((rectangle.width, rectangle.height), (960, 720))
+            state.update(alpha=0, clear_alpha=0, clipped=True)
+
+        def present(window):
+            self.assertEqual(state["alpha"], 1)
+            self.assertEqual(state["mask"], (True,) * 4)
+            self.assertFalse(state["clipped"])
+            self.assertEqual(viewer.context.currentBuffer, mujoco.mjtFramebuffer.mjFB_WINDOW)
+
+        viewer._gl.glDisable.side_effect = lambda flag: state.update(clipped=False)
+        viewer._gl.glColorMask.side_effect = lambda *mask: state.update(mask=mask)
+        viewer._gl.glClearColor.side_effect = lambda red, green, blue, alpha: state.update(clear_alpha=alpha)
+        viewer._gl.glClear.side_effect = clear
+        viewer._glfw.swap_buffers.side_effect = present
+        with ExitStack() as stack:
+            stack.enter_context(patch("mujoco.mjr_setBuffer", side_effect=set_buffer))
+            stack.enter_context(patch("mujoco.mjv_updateScene"))
+            stack.enter_context(patch("mujoco.mjr_render", side_effect=render))
+            stack.enter_context(patch("mujoco.mjr_overlay"))
+            blit = stack.enter_context(patch("mujoco.mjr_blitBuffer"))
+            viewer.redraw()
+            viewer.redraw()
+            blit.assert_not_called()
+        self.assertEqual(state["clears"], 2)
+        self.assertEqual(viewer._glfw.swap_buffers.call_count, 2)
+
     def test_every_present_is_fully_cleared_opaque_and_on_window_buffer(self) -> None:
         viewer = self.make_viewer()
         state = {"clipped": True, "mask": (True,) * 4, "alpha": 0, "full_clears": 0}

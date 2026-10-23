@@ -39,6 +39,26 @@ def convert_landmarks(points: list, require_confidence: bool) -> tuple[Landmark,
     )
 
 
+def convert_world_landmarks(points: list, image_points: list) -> tuple[Landmark, ...]:
+    """Conserva scores world explícitos; completa solo ausentes del mismo punto.
+
+    Tasks admite scores opcionales en world. La ausencia no equivale a confianza
+    cero ni uno: se usa el score de imagen del mismo landmark si está disponible.
+    El control sigue exigiendo imagen visible y geometría world coherente.
+    """
+    landmarks = []
+    for index, point in enumerate(points):
+        image = image_points[index] if index < len(image_points) else None
+        scores = []
+        for field in ("visibility", "presence"):
+            score = getattr(point, field, None)
+            if score is None:
+                score = getattr(image, field, None)
+            scores.append(score if score is not None else 0.0)
+        landmarks.append(Landmark(point.x, point.y, point.z, *scores))
+    return tuple(landmarks)
+
+
 class Detector:
     """VIDEO permite tracking y resultados alineados sin callbacks concurrentes."""
 
@@ -93,7 +113,9 @@ class Detector:
             if pose_result.pose_landmarks else (),
             hands=tuple(convert_landmarks(points, False) for points in hand_result.hand_landmarks)
             if hand_result is not None else (),
-            pose_world=convert_landmarks(world[0], True) if world else (),
+            pose_world=convert_world_landmarks(
+                world[0], pose_result.pose_landmarks[0] if pose_result.pose_landmarks else [],
+            ) if world else (),
         )
 
     def __exit__(

@@ -9,6 +9,8 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from proyectorobot.control.motion import ArmAngles, ArmTargets
+from proyectorobot.control.gestures import GestureResult
+from proyectorobot.control.hands import HandTargets, PINCH
 from proyectorobot.data.types import Landmark, Observation
 from proyectorobot.vision.worker import VisionConfig, VisionPacket, VisionStream, VisionWorkerError, offer_latest
 
@@ -20,6 +22,7 @@ def synthetic_capture(config, queue, stop, errors, generation=None):
                 Observation(100, (Landmark(0.5, 0.5),) * 33), time.monotonic(), 5.0,
                 ArmTargets(ArmAngles(0.5, 0.6), ArmAngles(0.7, 0.8)),
                 generation=generation.value if generation is not None else 0,
+                gestures=GestureResult(HandTargets(left=PINCH), "PINZA", "SIN MANO"),
             )
             offer_latest(queue, packet)
             stop.wait(0.02)
@@ -73,6 +76,8 @@ class VisionWorkerTests(unittest.TestCase):
             self.assertEqual(packet.observation.timestamp_ms, 100)
             self.assertEqual(len(packet.observation.pose), 33)
             self.assertEqual(packet.targets.left, ArmAngles(0.5, 0.6))
+            self.assertEqual(packet.gestures.targets.left, PINCH)
+            self.assertEqual(packet.gestures.left, "PINZA")
             self.assertFalse(hasattr(packet, "frame"))
         self.assertFalse(stream._process.is_alive())
 

@@ -2,12 +2,93 @@
 
 Robot virtual orientado a observar movimientos humanos, imitarlos y aprender
 tareas progresivamente. El desarrollo prioriza CPU en Fedora 43, i7-10510U,
-16 GB RAM e Intel UHD, con GNOME Wayland.
+16 GB RAM, Intel UHD y NVIDIA GeForce MX130, con GNOME Wayland. La visión y
+la física usan CPU; el dibujo del robot aprovecha OpenGL acelerado.
 
-**Fase actual: 2.1 — brazos con ocho ejes e imitación corporal 2D/3D.**
+**Fase actual: 2.2 — manos articuladas e interacción física con objetos.**
 La Fase 1 sigue disponible con el mismo comando. El usuario confirmó su
 funcionamiento con la webcam y autorizó Fase 2. Memoria, entrenamiento y agentes
 permanecen sin implementar; ver [PLAN.md](PLAN.md).
+
+## Inicio rápido de Fase 2.2
+
+Se reutilizan el venv, MuJoCo y ambos modelos existentes, sin instalaciones ni
+descargas. Desde la raíz, comprobar primero sin webcam:
+
+```bash
+.venv/bin/python -m proyectorobot.simulation.hands_app --check
+.venv/bin/python -m proyectorobot.simulation.hands_app --hand-demo --headless
+.venv/bin/python -m proyectorobot.simulation.hands_app --grasp-demo --headless
+.venv/bin/python -m proyectorobot.simulation.hands_app --grasp-demo --headless --side right
+```
+
+Ver la demo física (19 s), después iniciar imitación con ambas ventanas:
+
+```bash
+.venv/bin/python -m proyectorobot.simulation.hands_app --grasp-demo --graphics intel
+.venv/bin/python -m proyectorobot.simulation.hands_app --graphics intel
+```
+
+Primero calibra los brazos abajo como en Fase 2.1. Para **cada mano**, muestra
+la palma abierta con pulgar separado y quieta al menos medio segundo (cinco
+observaciones); después cierra el puño y mantenlo otro medio segundo. El panel
+indica `CAL: ABRIR MANO`, `CAL: CERRAR PUNO`, recuperación y gesto. Puedes calibrar
+cada mano sucesivamente. Mantén muñecas y palmas visibles y evita cruzarlas.
+Los ángulos de dedos y separación pulgar/índice controlan apertura continua,
+con calibración, filtros y límites.
+
+Para colocar la pinza sobre el cubo sin depender de profundidad monocular:
+
+```bash
+.venv/bin/python -m proyectorobot.simulation.hands_app --keyboard --graphics intel
+.venv/bin/python -m proyectorobot.simulation.hands_app --assist --graphics intel
+```
+
+| Tecla en el visor del robot | Acción |
+| --- | --- |
+| `1` / `2` | Seleccionar mano izquierda/derecha anatómica |
+| `O` / `F` / `P` | Abrir / puño / pinza, progresivamente |
+| `B` / `L` / `T` / `H` | Acercar al cubo / elevar / trasladar / postura segura asistida |
+| `M` | Alternar brazos asistidos y seguimiento corporal (con webcam) |
+| `K` | Retirar órdenes manuales de dedos y seguir gestos |
+| `R` / `C` | Parar y abrir / recalibrar y reanudar |
+| `Q` / Escape | Salir |
+
+En `--keyboard`: `O`, `B` (esperar 3 s), `P` (esperar 3 s), `L`, `T`, `O`;
+espera cada movimiento. Usa `--side right` para situar la mesa a la derecha.
+`--assist` mantiene brazos por teclado y dedos por webcam, tras calibrar ambos.
+`--no-hands` evita inferencia de dedos para ahorrar CPU: brazos por cámara y
+dedos con `O/F/P`.
+
+El agarre físico verificado eleva unos 13,2 cm, traslada 14 cm y suelta sobre la
+mesa con ambas manos. Los cubos son cuerpos libres. Ante pérdida de seguimiento,
+los dedos se abren suavemente y los brazos retornan a seguro; el cubo puede caer.
+La webcam no garantiza posición espacial precisa: usa asistencia para el agarre.
+Detalles y límites: [docs/PHASE2_2.md](docs/PHASE2_2.md). Se conservan las
+[verificaciones manuales de Fase 1](docs/VALIDATION.md).
+
+Ante líneas mezcladas o cambios de postura: el modo de robot ahora filtra
+saltos, longitudes incoherentes y algunas inversiones ambiguas de profundidad.
+Los puntos rechazados no se dibujan ni controlan el brazo; se muestran las
+causas y recuperación. Izquierda anatómica verde, derecha naranja. Un cruce
+gradual de brazos sigue permitido. La Fase 1 conserva su dibujo anterior.
+
+El modo `I:3D D:3D` del robot confirma control con profundidad estimada; `2D`
+no distingue delante/detrás. `3D-PAUSA` retiene la última consigna durante una
+interrupción breve (máximo 200 ms); `3D-RECUPERANDO` espera muestras coherentes.
+Mantén brazos abajo y visibles al pulsar `C`. La webcam proporciona estimaciones,
+sin garantizar réplica exacta ni localización precisa de la pinza sobre el cubo.
+La calibración 3D ahora se completa automáticamente por brazo si faltó al iniciar:
+mantén brazos abajo y estirados, con hombros/codos/muñecas visibles, unos 2–3 s.
+Necesita al menos seis muestras coherentes y un segundo de postura estable.
+No calibres extendiendo el brazo hacia delante: esa postura se usa después de
+que aparezca `3D I:ACTIVA` o `D:ACTIVA`. Si se queda en 2D, la nueva línea 3D
+indica el motivo: falta de world, confianza, geometría, postura o recuperación.
+En `--assist` los brazos se mueven por teclado; pulsa `M` en el visor para volver
+a imitar los brazos con la cámara, o inicia el comando normal sin `--assist`.
+Para agarrarlo, usa `--assist`, `B` y el indicador **Pinza-cubo**: cuando la pinza
+esté cerca del centro, ciérrala con tu gesto o `P`; espera contactos de pulgar e
+índice antes de `L`. El indicador mide solo posiciones virtuales de MuJoCo.
 
 ## Inicio rápido de Fase 2.1
 
@@ -25,6 +106,23 @@ Después abrir cámara y robot simultáneamente:
 ```bash
 .venv/bin/python -m proyectorobot.simulation --camera 0
 ```
+
+El modo gráfico predeterminado `auto` usa la selección del sistema; en este
+equipo se verificó Intel UHD. El visor indica el renderizador real. Para elegir
+una tarjeta explícitamente o usar el respaldo por CPU:
+
+```bash
+.venv/bin/python -m proyectorobot.simulation --graphics intel
+.venv/bin/python -m proyectorobot.simulation --graphics nvidia
+.venv/bin/python -m proyectorobot.simulation --graphics software
+```
+
+Intel y NVIDIA pasaron dibujo, cámara y redimensionado. La MX130 usa ahora dibujo
+directo a la ventana para evitar el fallo de la copia offscreen; esa copia sigue
+protegida. Comparadas con la misma escena y resolución, Intel tardó unos 5.2 ms
+por ciclo y NVIDIA 12.2 ms, ambas limitadas a 30 FPS. Intel sigue siendo la opción
+recomendada para esta escena. No se instalaron paquetes ni se cambiaron
+controladores. Evidencia en [docs/GRAPHICS.md](docs/GRAPHICS.md).
 
 La ventana de gestos de Fase 2 abre compacta, a 640×480, con panel inferior.
 El perfil rápido procesa como máximo 480×360 y solicita 30 FPS. Sigue hombros,
@@ -59,7 +157,8 @@ Detalles y aceptación manual pendiente en [docs/PHASE2_1.md](docs/PHASE2_1.md).
 Las rotaciones entran gradualmente al flexionar el codo; la histéresis evita que
 pequeñas oscilaciones cambien repetidamente entre flexión lateral y profundidad.
 El filtro responde antes a movimientos claros y conserva las velocidades máximas.
-El visor solicita 30 FPS, dibuja internamente a 384×288 y abre a 800×600. Los
+El visor solicita 30 FPS y abre a 800×600. Intel/software dibujan internamente
+a 384×288; la MX130 dibuja directamente al tamaño de la ventana. Los
 FPS reales de `Vision` y `Robot` se muestran por separado; pedir 30 no garantiza
 30 inferencias por segundo en CPU. Para limitar consumo se puede usar:
 

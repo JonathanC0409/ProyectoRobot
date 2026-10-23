@@ -3,7 +3,6 @@
 import argparse
 import logging
 from math import degrees, isfinite
-import os
 from pathlib import Path
 import sys
 import time
@@ -55,6 +54,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fps", type=positive_int, default=30)
     parser.add_argument("--render-fps", type=positive_int, default=30,
                         help="Límite de dibujo del robot; independiente de los FPS de visión.")
+    parser.add_argument("--graphics", choices=("auto", "intel", "nvidia", "software"), default="auto",
+                        help="Dibujo: selección del sistema, Intel, NVIDIA o respaldo por CPU.")
     parser.add_argument("--hands", action="store_true", help="Activar dedos detallados; requiere más CPU.")
     parser.add_argument("--tracking-timeout", type=positive_seconds, default=0.35,
                         help="Tiempo máximo sin pose fresca antes del retorno seguro.")
@@ -278,9 +279,11 @@ def main(argv: list[str] | None = None) -> int:
     if sys.version_info[:2] != (3, 12):
         logging.error("Usa .venv/bin/python (Python 3.12).")
         return 1
-    os.environ["LIBGL_ALWAYS_SOFTWARE"] = "1"
-    os.environ.setdefault("LP_NUM_THREADS", "2")
     try:
+        if not (args.check or args.check_camera or (args.headless and args.snapshot is None)):
+            from proyectorobot.simulation.graphics import configure_graphics
+
+            configure_graphics(args.graphics)
         from proyectorobot.control.motion import MotionController
         from proyectorobot.simulation.engine import RobotSimulation
 

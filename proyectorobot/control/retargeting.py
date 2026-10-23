@@ -6,7 +6,7 @@ from math import atan2, copysign, hypot, pi, radians
 
 from proyectorobot.control.motion import ArmAngles, ArmTargets, NEUTRAL
 from proyectorobot.data.types import Observation
-from proyectorobot.control.spatial import SpatialArm, SpatialMapper, measure_world, smooth_confidence
+from proyectorobot.control.spatial import SpatialArm, SpatialMapper, inspect_world, smooth_confidence
 
 
 def wrap_angle(angle: float) -> float:
@@ -25,16 +25,19 @@ class RetargetResult:
     targets: ArmTargets
     status: str
     progress: float = 0.0
+    depth_status: str = ""
 
 
 class PoseRetargeter:
     """Neutral estable inicial; laterales anatómicos y escalas de imagen corregidas."""
 
-    def __init__(self, calibration_ms: int = 1000, recovery_ms: int = 150) -> None:
-        if calibration_ms < 200 or recovery_ms < 0:
+    def __init__(self, calibration_ms: int = 1000, recovery_ms: int = 150,
+                 depth_grace_ms: int = 0) -> None:
+        if calibration_ms < 200 or recovery_ms < 0 or not 0 <= depth_grace_ms <= 200:
             raise ValueError("Calibración >= 200 ms y recuperación >= 0 requeridas.")
         self.calibration_ms = calibration_ms
         self.recovery_ms = recovery_ms
+        self.depth_grace_ms = depth_grace_ms
         self._last_ms = -1
         self.recalibrate()
 
@@ -45,6 +48,7 @@ class PoseRetargeter:
         self._recover_since: list[int | None] = [None, None]
         self._spatial = SpatialMapper(self.recovery_ms)
         self._frontal_active = [False, False]
+        self._last_spatial = [None, None]
 
     @property
     def calibrated(self) -> bool:
@@ -54,6 +58,7 @@ class PoseRetargeter:
         self._recover_since = [None, None]
         self._spatial.reset_tracking()
         self._frontal_active = [False, False]
+        self._last_spatial = [None, None]
         if not self.calibrated:
             self._samples.clear()
 
@@ -165,15 +170,19 @@ class PoseRetargeter:
             self.lose_tracking()
             return RetargetResult(ArmTargets(), "SEGURO: SIN TORSO")
         arms, width_ratio = measured
-        spatial = measure_world(observation, width, height)
+        spatial, depth_reasons = inspect_world(observation, width, height)
+        depth_status = "3D " + " | ".join(
+            f"{side}:{reason if reason != 'OK' else 'CALIBRAR BRAZO ABAJO'}"
+            for side, reason in zip(("I", "D"), depth_reasons)
+        )
         if not self.calibrated:
             if any(arm is None for arm in arms):
                 self._samples.clear()
-                return RetargetResult(ArmTargets(), "CALIBRAR: AMBOS BRAZOS")
+                return RetargetResult(ArmTargets(), "CALIBRAR: AMBOS BRAZOS", depth_status=depth_status)
             if any(abs(arm.angles.shoulder) > radians(35) or abs(arm.angles.elbow) > radians(25)
                    for arm in arms):
                 self._samples.clear()
-                return RetargetResult(ArmTargets(), "CALIBRAR: BRAZOS ABAJO")
+                return RetargetResult(ArmTargets(), "CALIBRAR: BRAZOS ABAJO", depth_status=depth_status)
             values = tuple(angle for arm in arms for angle in (arm.angles.shoulder, arm.angles.elbow))
             if self._samples:
                 first_angles = self._samples[0][1]
@@ -183,7 +192,7 @@ class PoseRetargeter:
             elapsed = timestamp - self._samples[0][0]
             progress = min(1.0, elapsed / self.calibration_ms, len(self._samples) / 6)
             if progress < 1:
-                return RetargetResult(ArmTargets(), f"CALIBRANDO: {progress:.0%}", progress)
+                return RetargetResult(ArmTargets(), f"CALIBRANDO: {progress:.0%}", progress, depth_status)
             count = len(self._samples)
             self._zero = tuple(
                 MeasuredArm(
@@ -197,16 +206,56 @@ class PoseRetargeter:
             self._width_ratio = sum(sample[3] for sample in self._samples) / count
             self._spatial.calibrate([sample[4] for sample in self._samples])
             self._samples.clear()
-        spatial = tuple(None if self._projection_conflicts(side, arms[side], arm) else arm
-                        for side, arm in enumerate(spatial))
+        neutral_measurements = tuple(
+            world if image is not None
+            and abs(image.angles.shoulder) <= radians(35)
+            and abs(image.angles.elbow) <= radians(25)
+            and all(0.8 <= current / reference <= 1.25 for current, reference in (
+                (image.upper_ratio, self._zero[side].upper_ratio),
+                (image.forearm_ratio, self._zero[side].forearm_ratio),
+            )) else None
+            for side, (image, world) in enumerate(zip(arms, spatial))
+        )
+        calibration = self._spatial.observe_neutral(neutral_measurements, timestamp, self.calibration_ms)
+        filtered_spatial, diagnostic_reasons = [], list(depth_reasons)
+        for side, arm in enumerate(spatial):
+            if self._projection_conflicts(side, arms[side], arm):
+                filtered_spatial.append(None)
+                diagnostic_reasons[side] = "PROYECCION NO COINCIDE"
+            else:
+                filtered_spatial.append(arm)
+        spatial = tuple(filtered_spatial)
         spatial_targets = self._spatial.targets(spatial, timestamp)
+        diagnostics = []
+        for side, label in enumerate(("I", "D")):
+            if spatial[side] is None:
+                reason = diagnostic_reasons[side]
+            elif self._spatial.reference[side] is not None:
+                reason = self._spatial.status[side]
+            elif neutral_measurements[side] is None:
+                reason = "BAJAR BRAZO PARA 3D"
+            else:
+                reason = calibration[side]
+            diagnostics.append(f"{label}:{reason}")
+        depth_status = "3D " + " | ".join(diagnostics)
         targets = []
         modes = []
         for side, arm in enumerate(arms):
             if spatial_targets[side] is not None:
+                self._last_spatial[side] = (timestamp, spatial_targets[side])
                 self._recover_since[side] = timestamp
                 targets.append(spatial_targets[side])
                 modes.append("3D")
+                continue
+            last_spatial = self._last_spatial[side]
+            if (self.depth_grace_ms and last_spatial is not None and arm is not None
+                    and timestamp - last_spatial[0] <= self.depth_grace_ms):
+                targets.append(last_spatial[1])
+                modes.append("3D-PAUSA")
+                continue
+            if (self.depth_grace_ms and last_spatial is not None and spatial[side] is not None):
+                targets.append(None)
+                modes.append("3D-RECUPERANDO")
                 continue
             frontal = self._frontal_target(side, arm)
             self._frontal_active[side] = frontal is not None
@@ -228,4 +277,4 @@ class PoseRetargeter:
         tracked = sum(target is not None for target in targets)
         status = ("SIGUIENDO", "SEGURO: SEGUIMIENTO PARCIAL", "SEGURO: SIN SEGUIMIENTO")
         detail = f" | I:{modes[0]} D:{modes[1]}"
-        return RetargetResult(ArmTargets(*targets), status[2 - tracked] + detail, 1.0)
+        return RetargetResult(ArmTargets(*targets), status[2 - tracked] + detail, 1.0, depth_status)

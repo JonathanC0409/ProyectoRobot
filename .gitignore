@@ -12,6 +12,8 @@ dist/
 !.env.example
 imagenesPruebas/
 .backups/
+core
+core.*
 models/*.task
 models/*.part
 models/*.sha256

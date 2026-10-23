@@ -1,14 +1,22 @@
 """Prueba gráfica real de repintado, sin webcam, capturas ni archivos de video."""
 
 import logging
-import os
+import argparse
 import time
 from unittest.mock import patch
 
 
-def main() -> int:
-    os.environ["LIBGL_ALWAYS_SOFTWARE"] = "1"
-    os.environ.setdefault("LP_NUM_THREADS", "2")
+def main(argv: list[str] | None = None) -> int:
+    from proyectorobot.simulation.graphics import GRAPHICS_MODES, configure_graphics
+
+    parser = argparse.ArgumentParser(description="Verificar opacidad y repintado sin webcam.")
+    parser.add_argument("--graphics", choices=GRAPHICS_MODES, default="auto")
+    parser.add_argument("--draw-target", choices=("auto", "window", "offscreen"), default="auto")
+    parser.add_argument("--cycles", type=int, default=1, help="Repeticiones de los tres tamaños; entre 1 y 20.")
+    args = parser.parse_args(argv)
+    if not 1 <= args.cycles <= 20:
+        parser.error("Se requieren entre 1 y 20 ciclos.")
+    configure_graphics(args.graphics)
     import mujoco
     import numpy as np
     from proyectorobot.simulation.engine import RobotSimulation
@@ -16,7 +24,9 @@ def main() -> int:
 
     failures = []
     checked = 0
-    with RobotViewer(RobotSimulation()) as viewer:
+    with RobotViewer(RobotSimulation(), allow_unstable_graphics=(args.graphics == "nvidia"
+                                                               and args.draw_target == "offscreen"),
+                     draw_target=args.draw_target) as viewer:
         from OpenGL import GL
 
         glfw = viewer._glfw
@@ -47,7 +57,7 @@ def main() -> int:
             original_swap(window)
 
         with patch.object(glfw, "swap_buffers", side_effect=check_and_swap):
-            for size in ((960, 720), (700, 700), (900, 540)):
+            for size in ((960, 720), (700, 700), (900, 540)) * args.cycles:
                 glfw.set_window_size(viewer.window, *size)
                 for _ in range(6):
                     if not viewer.running():
@@ -62,8 +72,8 @@ def main() -> int:
                     time.sleep(0.03)
     for failure in sorted(set(failures)):
         logging.error("%s", failure)
-    logging.info("Frames comprobados: %s; tamaños de ventana: 3.", checked)
-    return 1 if failures or checked < 18 else 0
+    logging.info("Frames comprobados: %s; tamaños de ventana: 3; ciclos: %s.", checked, args.cycles)
+    return 1 if failures or checked < 18 * args.cycles else 0
 
 
 if __name__ == "__main__":

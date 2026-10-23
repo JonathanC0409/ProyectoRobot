@@ -2,7 +2,8 @@
 
 Autorizada por el usuario. Se conserva la Fase 1 y la captura aislada de Fase 2.
 No se instalaron paquetes ni se descargaron modelos. No se graba ni transmite
-video; la inferencia y la simulación son locales, en CPU.
+video; la inferencia y la física son locales, en CPU. El dibujo aprovecha la GPU
+disponible; selección y evidencia en [GRAPHICS.md](GRAPHICS.md).
 
 ## Ejecutar y calibrar
 
@@ -134,8 +135,10 @@ La simulación responde aunque la inferencia o la comunicación se bloqueen.
 
 Se conservan ambas ventanas, procesamiento máximo de 480×360, pose sin modelo
 adicional de dedos y captura negociada a 640×480. `--hands` sigue siendo opcional.
-La física usa pasos de 5 ms; el dibujo del robot usa 384×288 y solicita 30 FPS,
-con Mesa por software y dos hilos. La ventana del robot abre a 800×600 y la de
+La física usa pasos de 5 ms; Intel/software dibujan a 384×288 y solicitan 30 FPS;
+NVIDIA MX130 usa dibujo directo al tamaño de la ventana para evitar la copia problemática,
+con OpenGL acelerado por defecto y respaldo Mesa por software con dos hilos.
+La ventana del robot abre a 800×600 y la de
 cámara conserva 640×480. El texto usa fuente 100 y se dibuja al pie en la
 ventana final; no crece al ampliar la imagen del robot. Se muestran seguimiento,
 calibración, FPS y edad de la observación. La edad no mide la latencia interna

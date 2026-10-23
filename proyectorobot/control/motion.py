@@ -49,7 +49,7 @@ class MotionController:
 
     def __init__(
         self, timeout: float = 0.35, max_speed: float = 1.5, smoothing: float = 0.12,
-        adaptive: bool = False,
+        adaptive: bool = False, neutral: tuple[float, ...] = NEUTRAL,
     ) -> None:
         if not all(isfinite(value) and value > 0 for value in (timeout, max_speed, smoothing)):
             raise ValueError("Timeout, velocidad y suavizado deben ser positivos y finitos.")
@@ -57,13 +57,19 @@ class MotionController:
         self.max_speed = max_speed
         self.smoothing = smoothing
         self.adaptive = adaptive
-        self.positions = NEUTRAL
-        self._targets = NEUTRAL
+        if len(neutral) != len(JOINTS) or any(
+            not isfinite(value) or not spec.lower <= value <= spec.upper
+            for value, spec in zip(neutral, JOINTS)
+        ):
+            raise ValueError("Postura segura incompatible con los límites articulares.")
+        self.neutral = tuple(neutral)
+        self.positions = self.neutral
+        self._targets = self.neutral
         self._valid = (False, False)
         self._captured_at: float | None = None
 
     def invalidate(self) -> None:
-        self._targets = NEUTRAL
+        self._targets = self.neutral
         self._valid = (False, False)
         self._captured_at = None
 
@@ -76,10 +82,9 @@ class MotionController:
             if self._captured_at is not None and captured_at <= self._captured_at:
                 raise ValueError("La observación debe ser posterior a la anterior.")
             values = []
-            for arm, specs in ((targets.left, JOINTS[:4]), (targets.right, JOINTS[4:])):
-                angles = arm.values if arm is not None else tuple(
-                    spec.neutral for spec in specs
-                )
+            for offset, arm in ((0, targets.left), (4, targets.right)):
+                specs = JOINTS[offset:offset + 4]
+                angles = arm.values if arm is not None else self.neutral[offset:offset + 4]
                 for value, spec in zip(angles, specs):
                     if not isfinite(value):
                         raise ValueError("Ángulo no finito; se activa postura segura.")
@@ -103,7 +108,7 @@ class MotionController:
             raise ValueError("Paso de control inválido: se requiere 0 < dt <= 0.1.")
         valid = self.tracking(now)
         desired = tuple(
-            target if valid[index // 4] else NEUTRAL[index]
+            target if valid[index // 4] else self.neutral[index]
             for index, target in enumerate(self._targets)
         )
         def filtered_delta(current: float, target: float) -> float:

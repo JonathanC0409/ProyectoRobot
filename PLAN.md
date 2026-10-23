@@ -144,11 +144,124 @@ La prueba breve no certifica rotaciones precisas ni una mejora de inferencia a
 Verificación final del ajuste: 121 pruebas superadas, demo física completa con
 el filtro adaptativo y 26 presentaciones gráficas válidas en tres tamaños.
 
+## Fase 2.1 — Aceleración del dibujo (autorizada)
+
+Respaldo previo confirmado: `a2289ea`, rama `main`, coincidente con `origin/main`
+en el repositorio del usuario. El usuario autorizó después aprovechar las GPU
+existentes para liberar CPU del dibujo. MediaPipe y física permanecen en CPU.
+
+Se eliminó el forzado permanente de software. `--graphics auto|intel|nvidia|software`
+permite selección por PCI y comprobación del contexto GLFW real. Auto usa la
+selección del sistema y respeta preferencias externas; el respaldo software
+sigue disponible. No se cambian controladores ni se instalan paquetes.
+
+Prueba aislada del visor, 90 fotogramas a 30 FPS por modo: CPU del proceso 129.4%
+de un núcleo en software, 15.1% con Intel y 29.8% con NVIDIA; mediana de ciclo
+26.19, 5.47 y 12.51 ms respectivamente. Intel es la selección normal del equipo.
+NVIDIA NV118/nouveau falló después en la prueba de redimensionado (pushbuf rechazado,
+salida 139). La investigación posterior aisló el fallo de la copia offscreen:
+también falló en XWayland, mientras que el dibujo directo pasó. NVIDIA usa ahora
+la ventana directamente y solo se rechaza su copia offscreen. No se reconfiguró
+el sistema ni se cambió el controlador.
+
+Integración Intel de 18 s: 207 observaciones recibidas, 206 consumidas, visión
+estable 12.8–16.2 FPS, robot 29.7 FPS al final, inferencia final 50 ms y edad 106 ms.
+No hubo control humano activo; terminó `SEGURO: SIN TORSO`. Comprobar manualmente
+imitación calibrada, giro, «L», espejo y rendimiento sostenido. No iniciar Fase 3.
+Evidencia y comandos en `docs/GRAPHICS.md`.
+Aceptación automática del ajuste: 128 pruebas superadas; repintado/opacidad con
+26 presentaciones en Intel y 26 en software; inicio automático Intel y cierre
+correctos. Después se habilitó NVIDIA con dibujo directo, opacidad comprobada y
+242 presentaciones correctas en diez ciclos de tres tamaños.
+
+Comparación equivalente posterior: dos mediciones por tarjeta, 150 fotogramas
+a 30 FPS y dibujo directo a 800×600, orden Intel/NVIDIA/NVIDIA/Intel. Intel:
+5.21–5.22 ms de mediana y 15.0–15.3% de un núcleo; NVIDIA: 12.12–12.18 ms y
+24.4–24.7%. Ambas mantuvieron 30 FPS. Intel sigue recomendada para esta carga;
+la prueba limitada a 30 FPS no estima el máximo de cada GPU ni su potencia general.
+Integración NVIDIA de 18 s: 220 observaciones recibidas, 219 consumidas, visión
+estable 14.4–15.9 FPS y dibujo final 30.7 FPS, sin control humano calibrado ni
+guardas físicas. Se habilita `--graphics nvidia` sin omitir la protección offscreen.
+Validación final: 129 pruebas superadas; 242 presentaciones verificadas durante
+30 cambios de tamaño con NVIDIA en modo directo. Pendiente aceptación humana
+calibrada y una sesión sostenida; no se afirma resuelto el defecto del controlador.
+
 Pendiente manual: calibración y modos 3D con una persona, movimientos hacia delante,
 manos al pecho/cara sin oclusión, cada lado y espejo, pausas/recalibración, cierres
 y sesión de dos minutos con CPU/RAM/FPS. Mantener los pendientes de Fase 1 en
 `docs/VALIDATION.md`. La profundidad es una estimación monocular, no una medida
 precisa. El modelo no evita autocolisiones. No iniciar Fase 3 sin autorización.
+
+## Fase 2.2 — Manos e interacción física (actual, autorizada)
+
+Etapa A: cinco dedos visibles por mano, una bisagra por dedo y tres consignas
+(pulgar, índice y sinergia de medio/anular/meñique). Conservar ocho ejes de brazos.
+Mesa y tres cubos libres; motor de contacto separado del motor original de ocho
+qpos. No welds/mocaps ni correcciones de posición de objetos durante ejecución.
+
+Aceptación A: seis controles independientes, límites y lateralidad; demostrar
+aproximación articular, cierre, contactos opuestos, elevación y traslado >9 cm,
+liberación y reposo sobre la mesa. Verificar que quitar los contactos impide el
+agarre. Validar esta etapa antes de conectar visión.
+
+Resultado A: ambos lados superan la secuencia determinista de 19 s: elevación
+13,22 cm, traslado 14,04 cm, contactos de pulgar/índice y liberación con error de
+altura <0,01 mm. Control negativo sin contactos: sin elevación ni traslado.
+Demo gráfica Intel: ~30 FPS y cumplimiento de los criterios físicos.
+
+Etapa B: reutilizar Hand Landmarker CPU y modelos locales. Asociación mediante
+muñecas anatómicas, distancias relativas a palma y ángulos locales; calibración
+abierta/puño independiente, filtrado, límites, pérdida y recuperación. Rechazar
+ambigüedad, geometría degenerada y datos antiguos. No inferir posición mundial
+precisa con el Z de mano ni convertir gestos en animaciones predefinidas.
+
+Etapa C: dos ventanas compactas, FPS/inferencia/edad; modos de demo, teclado,
+brazos asistidos y --no-hands. R pausa y abre; C recalibra manos y brazos. El
+watchdog permanece fuera del proceso de visión. Cerrar recursos ante errores.
+
+Aceptación B/C: pruebas geométricas y gestos sintéticos, lateralidad/espejo,
+filtrado, límites, timeout y recuperación; inferencia real separada. Confirmar
+manualmente abierta/puño/pinza por lado, brazos simultáneos, agarre asistido,
+oclusiones y cierres. No atribuir precisión humana a pruebas sintéticas.
+Resultados y comandos en `docs/PHASE2_2.md`; conservar los pendientes de Fase 1
+en `docs/VALIDATION.md` y Fase 2.1 en `docs/PHASE2_1.md`. Sin memoria, SQLite,
+aprendizaje ni agentes. Fase 3 no autorizada.
+
+Validación: 156 pruebas automáticas; demos físicas y gráfica de agarre superadas.
+Webcam 18 s con ambos modelos: 95 observaciones, visión ~6–8 FPS y dibujo ~30 FPS,
+sin completar calibración humana. Reapertura 10 s con --no-hands: 72 observaciones,
+visión ~13 FPS y dibujo ~30 FPS, cierre normal. Aceptación humana de gestos e
+interacción pendiente; no afirmar seguimiento de manos calibrado con esa prueba.
+
+Corrección posterior al reporte de líneas cruzadas: filtro previo al control
+con continuidad temporal normalizada por hombros, confianza >=0,7, referencia
+de longitudes con brazos abajo, recuperación y rechazo de inversiones bruscas
+de profundidad con imagen casi idéntica. No reetiqueta brazos ni elimina cruces
+graduales. Permite segmentos muy cortos en imagen si world es coherente.
+El robot retiene 3D hasta 200 ms ante caída breve de profundidad y evita pasar
+por 2D mientras 3D se recupera. Colores anatómicos, diagnóstico de calidad,
+distancia virtual pinza-cubo y contactos reales para apoyar el agarre asistido.
+Validar con pruebas de saltos/intercambios, profundidad ambigua, pérdida 3D,
+profundidad válida, brazos independientes y regresión de agarre. Confirmación
+humana del ajuste pendiente; no prometer profundidad métrica ni réplica al 100%.
+Resultado del ajuste: 170 pruebas superadas, sin omisiones, incluidas las físicas
+de agarre. Integración real de 12 s: 46 observaciones, visión ~6 FPS, dibujo
+~30 FPS y cierre correcto; sin calibración humana completada. La aceptación
+de cruces/profundidad e interacción con una persona sigue pendiente.
+
+Corrección de bloqueo permanente en 2D: completar de forma independiente las
+referencias 3D que faltaron durante el arranque, con postura neutral fresca,
+seis muestras y un segundo. No recalibrar brazos ya listos ni convertir una
+postura de alcance en neutral. Los scores world opcionales ausentes heredan
+solo el score del mismo landmark de imagen; conservar scores bajos explícitos
+y filtros geométricos. Añadir causa de rechazo y progreso/estado 3D a ambas
+ventanas y logs, y aclarar que --assist controla brazos por teclado (M cambia).
+Regresiones: arranque sin world, llegada tardía, independencia, brazo hacia
+delante, confianza opcional y ventana de calibración a 30 FPS. Aceptación de
+profundidad con la persona pendiente; no forzar 3D cuando los datos no son válidos.
+Resultado: 179 pruebas superadas. Integración real sin dedos, 18 s: 180
+observaciones y cierre normal, pero calibración incompleta (CONFIANZA BRAZO).
+No afirmar control 3D humano validado; usar el diagnóstico para comprobarlo.
 
 ## Fase 3 — Demostraciones y SQLite (sin iniciar)
 

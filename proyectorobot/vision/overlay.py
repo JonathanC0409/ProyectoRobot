@@ -31,8 +31,21 @@ def render(
     compact: bool = False, hands_enabled: bool = True,
 ) -> np.ndarray:
     output = cv2.flip(frame, 1) if mirror else frame.copy()
-    draw_landmarks(output, observation.pose, vision.PoseLandmarksConnections.POSE_LANDMARKS,
-                   (70, 220, 70), mirror, 0.6)
+    connections = vision.PoseLandmarksConnections.POSE_LANDMARKS
+    if compact:
+        left_indices, right_indices = {11, 13, 15}, {12, 14, 16}
+        arm_indices = left_indices | right_indices
+        body = tuple(point if index not in arm_indices else Landmark(0, 0, visibility=0)
+                     for index, point in enumerate(observation.pose))
+        draw_landmarks(output, body, connections, (140, 140, 140), mirror, 0.6)
+        for indices, color in ((left_indices, (70, 220, 70)), (right_indices, (0, 145, 255))):
+            points = tuple(point if index in indices else Landmark(0, 0, visibility=0)
+                           for index, point in enumerate(observation.pose))
+            arm_connections = [connection for connection in connections
+                               if connection.start in indices and connection.end in indices]
+            draw_landmarks(output, points, arm_connections, color, mirror, 0.6)
+    else:
+        draw_landmarks(output, observation.pose, connections, (70, 220, 70), mirror, 0.6)
     for hand in observation.hands:
         draw_landmarks(output, hand, vision.HandLandmarksConnections.HAND_CONNECTIONS,
                        (0, 200, 255), mirror, 0.0)

@@ -15,6 +15,8 @@ from typing import Self
 
 from proyectorobot.data.types import Observation
 from proyectorobot.control.motion import ArmTargets
+from proyectorobot.control.gestures import GestureResult, HandGestureRecognizer
+from proyectorobot.control.pose_quality import PoseQualityFilter
 
 @dataclass(frozen=True)
 class VisionConfig:
@@ -29,6 +31,7 @@ class VisionConfig:
     mirror: bool = True
     track_hands: bool = False
     recovery_ms: int = 80
+    recognize_hands: bool = False
 
 
 @dataclass(frozen=True)
@@ -40,6 +43,9 @@ class VisionPacket:
     status: str = "INICIANDO VISION"
     generation: int = 0
     fps: float = 0.0
+    gestures: GestureResult = GestureResult()
+    quality_status: str = ""
+    depth_status: str = ""
 
 
 class VisionWorkerError(RuntimeError):
@@ -91,8 +97,10 @@ def capture_worker(config: VisionConfig, queue, stop, errors, generation=None) -
 
         cv2.setNumThreads(2)
         last_timestamp_ms = -1
-        retargeter = PoseRetargeter(recovery_ms=config.recovery_ms)
+        retargeter = PoseRetargeter(recovery_ms=config.recovery_ms, depth_grace_ms=200)
+        pose_filter = PoseQualityFilter()
         recognizer = ArmRecognizer(allow_upper_body=True, hold_ms=config.recovery_ms)
+        hand_recognizer = HandGestureRecognizer() if config.recognize_hands else None
         current_generation = 0
         report_start = time.monotonic()
         reported_frames = 0
@@ -115,12 +123,17 @@ def capture_worker(config: VisionConfig, queue, stop, errors, generation=None) -
                     if requested_generation != current_generation:
                         current_generation = requested_generation
                         retargeter.recalibrate()
+                        pose_filter.reset()
+                        if hand_recognizer is not None:
+                            hand_recognizer.recalibrate()
                     captured = camera.read()
                     frame = limit_frame_size(captured.image, config.width, config.height)
                     captured_at = captured.captured_at
                     inference_start = time.monotonic()
                     timestamp_ms = max(last_timestamp_ms + 1, int(captured_at * 1000))
-                    observation = detector.detect(frame, timestamp_ms)
+                    raw_observation = detector.detect(frame, timestamp_ms)
+                    quality = pose_filter.update(raw_observation, frame.shape[1], frame.shape[0])
+                    observation = quality.observation
                     last_timestamp_ms = timestamp_ms
                     inference_ms = (time.monotonic() - inference_start) * 1000
                     was_calibrated = retargeter.calibrated
@@ -133,16 +146,22 @@ def capture_worker(config: VisionConfig, queue, stop, errors, generation=None) -
                         instant = 1 / max(captured_at - previous_capture, 1e-9)
                         fps = instant if fps == 0 else 0.85 * fps + 0.15 * instant
                     previous_capture = captured_at
+                    gestures = (hand_recognizer.update(observation, frame.shape[1], frame.shape[0])
+                                if hand_recognizer is not None and current_generation >= 0
+                                else GestureResult())
                     offer_latest(queue, VisionPacket(
                         observation, captured_at, inference_ms, result.targets,
-                        result.status, current_generation, fps,
+                        result.status, current_generation, fps, gestures, quality.status, result.depth_status,
                     ))
                     display_start = time.monotonic()
                     if config.show_camera:
                         states = recognizer.update(observation)
                         output = render(
                             frame, observation, states, config.mirror, fps, inference_ms,
-                            extra_lines=(f"Robot: {result.status}", "R: reposo | C: calibrar | Sin grabacion"),
+                            extra_lines=(f"Robot: {result.status}", quality.status, result.depth_status) + (
+                                (f"Mano I: {gestures.left} | D: {gestures.right}",)
+                                if hand_recognizer is not None else ()
+                            ) + ("R: reposo | C: calibrar | Sin grabacion",),
                             compact=True, hands_enabled=config.track_hands,
                         )
                         cv2.imshow(camera_window, output)
@@ -169,6 +188,7 @@ def capture_worker(config: VisionConfig, queue, stop, errors, generation=None) -
                                      total_inference_ms / reported_frames,
                                      total_read_ms / reported_frames,
                                      total_display_ms / reported_frames)
+                        logging.info("Profundidad: %s | %s", result.status, result.depth_status)
                         report_start = report_time
                         reported_frames = 0
                         total_inference_ms = total_read_ms = total_display_ms = 0.0

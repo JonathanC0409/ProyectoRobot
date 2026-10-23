@@ -21,6 +21,32 @@ except (ImportError, OSError):
 
 @unittest.skipUnless(VISION_AVAILABLE, "Dependencias de Fase 1 no disponibles")
 class VisionTests(unittest.TestCase):
+    def test_missing_world_scores_use_only_same_landmark_image_scores(self):
+        from proyectorobot.vision.detector import convert_world_landmarks
+        image = [SimpleNamespace(visibility=0.92, presence=0.85),
+                 SimpleNamespace(visibility=0.1, presence=0.2)]
+        world = [SimpleNamespace(x=-0.3, y=0.2, z=-0.4, visibility=None, presence=None)] * 2
+        converted = convert_world_landmarks(world, image)
+        self.assertEqual(converted[0], Landmark(-0.3, 0.2, -0.4, 0.92, 0.85))
+        self.assertFalse(converted[1].confident(0.65))
+        self.assertFalse(convert_world_landmarks(world, [])[0].confident(0.65))
+
+    def test_explicit_low_world_confidence_is_never_replaced_by_high_image_score(self):
+        from proyectorobot.vision.detector import convert_world_landmarks
+        image = [SimpleNamespace(visibility=1, presence=1)]
+        world = [SimpleNamespace(x=0, y=0, z=0, visibility=0.2, presence=0.0)]
+        self.assertEqual(convert_world_landmarks(world, image)[0], Landmark(0, 0, 0, 0.2, 0.0))
+
+    def test_compact_arms_have_distinct_anatomical_colors_without_relabelling(self):
+        from test_retargeting import frontal_pose
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        with patch("proyectorobot.vision.overlay.cv2.line", wraps=cv2.line) as lines:
+            render(frame, Observation(0, frontal_pose()), ArmStates(ArmState.DOWN, ArmState.DOWN),
+                   True, 10, 100, compact=True)
+        colors = [call.args[3] for call in lines.call_args_list]
+        self.assertEqual(colors.count((70, 220, 70)), 2)
+        self.assertEqual(colors.count((0, 145, 255)), 2)
+
     def test_pose_only_mode_neither_requires_nor_runs_hand_model(self) -> None:
         with TemporaryDirectory() as directory:
             from proyectorobot.config import POSE_FILENAME
